@@ -1,12 +1,12 @@
 // type alias for exception handling
 use std::result;
 pub type Result<T> = result::Result<T, Exception>;
-use interrupts::{InterruptController, AutoInterruptController, SPURIOUS_INTERRUPT};
-use ram::loggingmem::{LoggingMem, OpsLogger};
+use crate::interrupts::{InterruptController, AutoInterruptController, SPURIOUS_INTERRUPT};
+use crate::ram::loggingmem::{LoggingMem, OpsLogger};
 pub type TestCore = ConfiguredCore<AutoInterruptController, LoggingMem<OpsLogger>>;
 pub type Handler<T> = fn(&mut T) -> Result<Cycles>;
 pub type InstructionSet<T> = Vec<Handler<T>>;
-use ram::{AddressBus, SUPERVISOR_PROGRAM, SUPERVISOR_DATA, USER_PROGRAM, USER_DATA};
+use crate::ram::{AddressBus, SUPERVISOR_PROGRAM, SUPERVISOR_DATA, USER_PROGRAM, USER_DATA};
 pub mod ops;
 mod effective_address;
 mod operator;
@@ -217,7 +217,7 @@ impl<T: InterruptController, A: AddressBus> Core for ConfiguredCore<T, A> {
     }
     fn cond_eq(&self) -> bool {
         // equal
-        (self.not_z_flag == ZFLAG_SET)
+        self.not_z_flag == ZFLAG_SET
     }
     fn cond_ne(&self) -> bool {
         // not equal
@@ -225,7 +225,7 @@ impl<T: InterruptController, A: AddressBus> Core for ConfiguredCore<T, A> {
     }
     fn cond_vc(&self) -> bool {
         // overflow clear
-        (self.v_flag & VFLAG_SET == 0)
+        self.v_flag & VFLAG_SET == 0
     }
     fn cond_vs(&self) -> bool {
         // overflow set
@@ -233,7 +233,7 @@ impl<T: InterruptController, A: AddressBus> Core for ConfiguredCore<T, A> {
     }
     fn cond_pl(&self) -> bool {
         // plus
-        (self.n_flag & NFLAG_SET == 0)
+        self.n_flag & NFLAG_SET == 0
     }
     fn cond_mi(&self) -> bool {
         // minus
@@ -295,7 +295,8 @@ impl<T: InterruptController, A: AddressBus> Core for ConfiguredCore<T, A> {
         &mut self.inactive_usp
     }
     fn reset_external_devices(&mut self) {
-        self.int_ctrl.reset_external_devices()
+        self.int_ctrl.reset_external_devices();
+        self.mem.reset_instruction();
     }
     fn resume_normal_processing(&mut self) {
         self.processing_state = ProcessingState::Normal;
@@ -361,24 +362,16 @@ impl ProcessingState {
     // processing an instruction if it is processing a group 0 or a group 1
     // exception. This info goes into a Group0 stack frame
     fn instruction_processing(self) -> bool {
-        match self {
-            ProcessingState::Normal => true,
-            ProcessingState::Group2Exception => true,
-            _ => false
-        }
+        matches!(self, ProcessingState::Normal | ProcessingState::Group2Exception)
     }
     fn running(self) -> bool {
-        match self {
-            ProcessingState::Stopped => false,
-            ProcessingState::Halted => false,
-            _ => true
-        }
+        !matches!(self, ProcessingState::Stopped | ProcessingState::Halted)
     }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum AccessType {Read, Write}
-use ram::AddressSpace;
+use crate::ram::AddressSpace;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Exception {
@@ -395,12 +388,12 @@ impl fmt::Display for Exception {
         match *self {
             Exception::AddressError {
                 address, access_type, processing_state, address_space
-                } => write!(f, "Address Error: {:?} {:?} at {:08x} during {:?} processing", access_type, address_space, address, processing_state),
-            Exception::IllegalInstruction(ir, pc) => write!(f, "Illegal Instruction {:04x} at {:08x}", ir, pc),
-            Exception::Trap(num, ea_cyc) => write!(f, "Trap: {:02x} (ea cyc {})", num, ea_cyc),
-            Exception::PrivilegeViolation(ir, pc) => write!(f, "Privilege Violation {:04x} at {:08x}", ir, pc),
-            Exception::UnimplementedInstruction(ir, pc, _) => write!(f, "Unimplemented Instruction {:04x} at {:08x}", ir, pc),
-            Exception::Interrupt(irq, vec) => write!(f, "Interrupt {:1x} (vector {:02x})", irq, vec),
+                } => write!(f, "Address Error: {access_type:?} {address_space:?} at {address:08x} during {processing_state:?} processing"),
+            Exception::IllegalInstruction(ir, pc) => write!(f, "Illegal Instruction {ir:04x} at {pc:08x}"),
+            Exception::Trap(num, ea_cyc) => write!(f, "Trap: {num:02x} (ea cyc {ea_cyc})"),
+            Exception::PrivilegeViolation(ir, pc) => write!(f, "Privilege Violation {ir:04x} at {pc:08x}"),
+            Exception::UnimplementedInstruction(ir, pc, _) => write!(f, "Unimplemented Instruction {ir:04x} at {pc:08x}"),
+            Exception::Interrupt(irq, vec) => write!(f, "Interrupt {irq:1x} (vector {vec:02x})"),
         }
     }
 }
@@ -416,7 +409,7 @@ impl error::Error for Exception {
             Exception::Interrupt(_, _) => "Interrupt",
          }
     }
-    fn cause(&self) -> Option<&error::Error> {
+    fn cause(&self) -> Option<&dyn error::Error> {
         None
     }
 }
@@ -603,7 +596,7 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
         self.prefetch_if_needed();
         let prev_prefetch_data = self.prefetch_data;
         Ok(if self.prefetch_if_needed() {
-            ((prev_prefetch_data << 16) | (self.prefetch_data >> 16))
+            (prev_prefetch_data << 16) | (self.prefetch_data >> 16)
         } else {
             prev_prefetch_data
         })

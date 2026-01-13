@@ -1,6 +1,7 @@
 [package]
 name = "r68k-common"
 version = "0.1.0"
+edition = "2021"
 authors = ["Martin Hellspong <martin.hellspong@factor10.com>"]
 
 [dependencies]

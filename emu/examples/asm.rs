@@ -19,7 +19,7 @@ fn main() {
     ADD.B   D0,D1
 "#;
 
-    println!("{}", asm);
+    println!("{asm}");
     let mut reader = BufReader::new(asm.as_bytes());
     let (end, mem) = r68k_asm.assemble(&mut reader).unwrap();
     let offset = mem.offset();

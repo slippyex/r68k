@@ -5,7 +5,6 @@ use super::opcodes::*;
 use super::super::InstructionSet;
 use super::*;
 
-#[allow(dead_code)]
 pub struct OpcodeHandler<T: Core> {
     mask: u32,
     matching: u32,
@@ -21,6 +20,12 @@ pub struct InstructionSetGenerator<T: Core> {
     optable: Vec<OpcodeHandler<T>>
 }
 
+impl<T: Core> Default for InstructionSetGenerator<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T: Core> InstructionSetGenerator<T> {
     pub fn new() -> InstructionSetGenerator<T> {
         InstructionSetGenerator {
@@ -29,7 +34,7 @@ impl<T: Core> InstructionSetGenerator<T> {
     }
 
     pub fn generate(&self) -> InstructionSet<T> {
-        self.generate_with(illegal, |ref op| op.handler)
+        self.generate_with(illegal, |op| op.handler)
     }
 
     pub fn generate_with<F: Clone, G>(&self, def: F, with: G) -> Vec<F>
@@ -69,7 +74,7 @@ impl<T: Core> InstructionSetGenerator<T> {
             match offset_cache.get(&op.mask) {
                 Some(offsets) => {
                     for opcode in offsets.iter().flat_map(|&(start, len)| (start..(start+len)).map(|o| o + op.matching)) {
-                        handler[opcode as usize] = with(&op);
+                        handler[opcode as usize] = with(op);
                         _implemented += 1;
                     }
                 },
@@ -79,7 +84,7 @@ impl<T: Core> InstructionSetGenerator<T> {
                     let mut matching = 0;
                     for opcode in op.matching..0x10000 {
                         if (opcode & op.mask) == op.matching {
-                            handler[opcode as usize] = with(&op);
+                            handler[opcode as usize] = with(op);
                             _implemented += 1;
                             matching += 1;
                             if matching >= max_count {

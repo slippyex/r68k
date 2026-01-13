@@ -72,8 +72,8 @@ extern {
     fn m68k_set_reg(regnum: Register, value: u32);
     fn m68k_set_irq(irq: u32);
 }
-use ram::{AddressSpace, SUPERVISOR_PROGRAM, SUPERVISOR_DATA, USER_PROGRAM, USER_DATA, ADDRBUS_MASK};
-use ram::loggingmem::Operation;
+use crate::ram::{AddressSpace, SUPERVISOR_PROGRAM, SUPERVISOR_DATA, USER_PROGRAM, USER_DATA, ADDRBUS_MASK};
+use crate::ram::loggingmem::Operation;
 static mut MUSASHI_LOCATIONS_USED: usize = 0;
 static mut MUSASHI_MEMORY_INITIALIZER: u32 = 0xaaaaaaaa;
 static mut MUSASHI_MEMORY_LOCATION:  [u32; 1024] = [0; 1024];
@@ -245,7 +245,7 @@ pub fn roundtrip_register(reg: Register, value: u32) -> u32 {
     }
 }
 
-use cpu::{TestCore, Cycles};
+use crate::cpu::{TestCore, Cycles};
 
 static REGS:[Register; 16] = [Register::D0, Register::D1, Register::D2, Register::D3, Register::D4, Register::D5, Register::D6, Register::D7, Register::A0, Register::A1, Register::A2, Register::A3, Register::A4, Register::A5, Register::A6, Register::A7];
 
@@ -2760,7 +2760,7 @@ use super::m68k_get_reg;
     }
 
 
-use ram::{SUPERVISOR_DATA, USER_PROGRAM, USER_DATA, ADDRBUS_MASK};
+use crate::ram::{SUPERVISOR_DATA, USER_PROGRAM, USER_DATA, ADDRBUS_MASK};
 
     #[test]
     fn read_initialized_memory() {

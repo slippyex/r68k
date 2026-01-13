@@ -1,6 +1,6 @@
 #![macro_use]
 use super::super::Core;
-use cpu::{CFLAG_SET, ZFLAG_SET, XFLAG_SET, NFLAG_SET, ZFLAG_CLEAR, VFLAG_CLEAR, CFLAG_CLEAR, XFLAG_CLEAR, NFLAG_CLEAR};
+use crate::cpu::{CFLAG_SET, ZFLAG_SET, XFLAG_SET, NFLAG_SET, ZFLAG_CLEAR, VFLAG_CLEAR, CFLAG_CLEAR, XFLAG_CLEAR, NFLAG_CLEAR};
 use std::num::Wrapping;
 
 macro_rules! ir_dx {
@@ -126,7 +126,7 @@ pub fn abcd_8<T: Core>(core: &mut T, dst: u32, src: u32) -> u32 {
 
     // res = ((res) & 0xff);
     // m68ki_cpu.not_z_flag |= res;
-    res = mask_out_above_8!(res);
+    res &= 0xff;
     not_z_flag!(core) |= res;
     res
 }
@@ -834,7 +834,7 @@ pub fn muls_16<T: Core>(core: &mut T, dst: i16, src: i16) -> u32 {
 }
 // Put common implementation of MULU here
 pub fn mulu_16<T: Core>(core: &mut T, dst: u16, src: u16) -> u32 {
-    let res = u32::from(dst).wrapping_mul(u32::from(src)) as u32;
+    let res = u32::from(dst).wrapping_mul(u32::from(src));
     not_z_flag!(core) = res;
     n_flag!(core) = res >> 24;
     v_flag!(core) = 0;
@@ -843,7 +843,7 @@ pub fn mulu_16<T: Core>(core: &mut T, dst: u16, src: u16) -> u32 {
 }
 // Put common implementation of NBCD here
 pub fn nbcd<T: Core>(core: &mut T, dst: u32) -> Option<u32> {
-    let mut res = mask_out_above_8!((0x9a as u32).wrapping_sub(dst).wrapping_sub(core.x_flag_as_1()));
+    let mut res = mask_out_above_8!(0x9a_u32.wrapping_sub(dst).wrapping_sub(core.x_flag_as_1()));
     let answer = if res != 0x9a {
         v_flag!(core) = !res;
         if (res & 0x0f) == 0xa {
@@ -1244,7 +1244,7 @@ pub fn sbcd_8<T: Core>(core: &mut T, dst: u32, src: u32) -> u32 {
     v_flag!(core) &= res;
     n_flag!(core) = res;
 
-    res = mask_out_above_8!(res);
+    res &= 0xff;
     not_z_flag!(core) |= res;
     res
 }

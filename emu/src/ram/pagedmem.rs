@@ -13,13 +13,13 @@ pub struct PagedMem {
 }
 
 impl PagedMem {
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn allocated_pages(&self) -> usize {
         self.pages.len()
     }
     fn new_page_is_needed(&self, address: u32, value_to_write: u8) -> bool {
         let pageno = address & PAGE_MASK;
-        let write_differs_from_initializer = value_to_write as u8 != self.read_initializer(address);
+        let write_differs_from_initializer = value_to_write != self.read_initializer(address);
         !self.pages.contains_key(&pageno) && write_differs_from_initializer
     }
     // returns a page if it is already allocated, but inserts a missing page
@@ -111,15 +111,15 @@ impl AddressBus for PagedMem {
     }
 
     fn read_word(&self, _address_space: AddressSpace, address: u32) -> u32 {
-        (self.read_u8(address) << 8
-        |self.read_u8(address.wrapping_add(1))) as u32
+        self.read_u8(address) << 8
+        |self.read_u8(address.wrapping_add(1))
     }
 
     fn read_long(&self, _address_space: AddressSpace, address: u32) -> u32 {
-        (self.read_u8(address) << 24
+        self.read_u8(address) << 24
         |self.read_u8(address.wrapping_add(1)) << 16
         |self.read_u8(address.wrapping_add(2)) <<  8
-        |self.read_u8(address.wrapping_add(3))) as u32
+        |self.read_u8(address.wrapping_add(3))
     }
 
     fn write_byte(&mut self, _address_space: AddressSpace, address: u32, value: u32) {

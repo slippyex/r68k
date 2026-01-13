@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use super::{AddressSpace, AddressBus, ADDRBUS_MASK};
-use ram::pagedmem::{PagedMem, DiffIter};
+use crate::ram::pagedmem::{PagedMem, DiffIter};
 
 #[derive(Copy, Clone, PartialEq)]
 pub enum Operation {
@@ -17,12 +17,12 @@ impl fmt::Debug for Operation {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Operation::None => write!(f, "None"),
-            Operation::ReadByte(aspace, addr, byte) => write!(f, "ReadByte{:?} @{:06x} => {:02x}", aspace, addr, byte),
-            Operation::ReadWord(aspace, addr, word) => write!(f, "ReadWord{:?} @{:06x} => {:04x}", aspace, addr, word),
-            Operation::ReadLong(aspace, addr, long) => write!(f, "ReadLong{:?} @{:06x} => {:08x}", aspace, addr, long),
-            Operation::WriteByte(aspace, addr, byte) => write!(f, "WriteByte{:?} @{:06x} <= {:02x}", aspace, addr, byte),
-            Operation::WriteWord(aspace, addr, word) => write!(f, "WriteWord{:?} @{:06x} <= {:04x}", aspace, addr, word),
-            Operation::WriteLong(aspace, addr, long) => write!(f, "WriteLong{:?} @{:06x} <= {:08x}", aspace, addr, long),
+            Operation::ReadByte(aspace, addr, byte) => write!(f, "ReadByte{aspace:?} @{addr:06x} => {byte:02x}"),
+            Operation::ReadWord(aspace, addr, word) => write!(f, "ReadWord{aspace:?} @{addr:06x} => {word:04x}"),
+            Operation::ReadLong(aspace, addr, long) => write!(f, "ReadLong{aspace:?} @{addr:06x} => {long:08x}"),
+            Operation::WriteByte(aspace, addr, byte) => write!(f, "WriteByte{aspace:?} @{addr:06x} <= {byte:02x}"),
+            Operation::WriteWord(aspace, addr, word) => write!(f, "WriteWord{aspace:?} @{addr:06x} <= {word:04x}"),
+            Operation::WriteLong(aspace, addr, long) => write!(f, "WriteLong{aspace:?} @{addr:06x} <= {long:08x}"),
         }
     }
 }
@@ -94,17 +94,17 @@ impl<T: OpsLogging> AddressBus for LoggingMem<T> {
     }
 
     fn read_word(&self, address_space: AddressSpace, address: u32) -> u32 {
-        let value = (self.read_u8(address) << 8
-                    |self.read_u8(address.wrapping_add(1))) as u32;
+        let value = self.read_u8(address) << 8
+                    |self.read_u8(address.wrapping_add(1));
         self.logger.log(Operation::ReadWord(address_space, address & ADDRBUS_MASK, value as u16));
         value
     }
 
     fn read_long(&self, address_space: AddressSpace, address: u32) -> u32 {
-        let value = (self.read_u8(address) << 24
+        let value = self.read_u8(address) << 24
                     |self.read_u8(address.wrapping_add(1)) << 16
                     |self.read_u8(address.wrapping_add(2)) <<  8
-                    |self.read_u8(address.wrapping_add(3))) as u32;
+                    |self.read_u8(address.wrapping_add(3));
         self.logger.log(Operation::ReadLong(address_space, address & ADDRBUS_MASK, value));
         value
     }

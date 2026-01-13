@@ -22,7 +22,7 @@ use std::fmt;
 impl fmt::Debug for AddressSpace {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            AddressSpace(mode, segment) => write!(f, "[{:?}/{:?}]", mode, segment),
+            AddressSpace(mode, segment) => write!(f, "[{mode:?}/{segment:?}]"),
         }
     }
 }
@@ -49,5 +49,7 @@ pub trait AddressBus {
     fn write_byte(&mut self, address_space: AddressSpace, address: u32, value: u32);
     fn write_word(&mut self, address_space: AddressSpace, address: u32, value: u32);
     fn write_long(&mut self, address_space: AddressSpace, address: u32, value: u32);
+    /// Called when a RESET instruction is executed. Default implementation does nothing.
+    fn reset_instruction(&mut self) {}
 }
 
