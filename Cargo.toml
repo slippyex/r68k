@@ -1,11 +1,11 @@
 [package]
 name = "r68k"
 description = "Motorola 68000 CPU emulator, ported from the battle-tested Musashi emulator"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["Martin Hellspong <martin.hellspong@factor10.com>", "Markus Velten <mvelten773@gmail.com>"]
 license = "MIT"
-repository = "https://github.com/marhel/r68k"
+repository = "https://github.com/slippyex/r68k"
 keywords = ["m68k", "68000", "emulator", "motorola", "retro"]
 categories = ["emulators", "simulation"]
 readme = "README.md"
