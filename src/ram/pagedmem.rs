@@ -1,3 +1,8 @@
+//! Paged memory implementation for the 68000 emulator.
+//!
+//! This module provides [`PagedMem`], a sparse memory implementation that
+//! only allocates pages when written to with non-default values.
+
 use std::collections::HashMap;
 use super::{AddressSpace, AddressBus, ADDRBUS_MASK};
 
@@ -7,8 +12,38 @@ const PAGE_MASK: u32 = ADDRBUS_MASK ^ ADDR_MASK;
 
 type Page = Vec<u8>;
 
+/// A sparse, paged memory implementation.
+///
+/// `PagedMem` only allocates memory pages when they are written to with
+/// values different from the initializer pattern. This makes it memory-efficient
+/// for emulating systems where only a fraction of the 16 MB address space is used.
+///
+/// # Initializer Pattern
+///
+/// Unwritten memory returns values from a 4-byte initializer pattern that repeats
+/// across the address space. This is useful for detecting uninitialized memory access.
+///
+/// # Example
+///
+/// ```rust
+/// use r68k::ram::{PagedMem, AddressBus, SUPERVISOR_DATA};
+///
+/// // Create memory with 0xDEADBEEF as the uninitialized pattern
+/// let mut mem = PagedMem::new(0xDEADBEEF);
+///
+/// // Reading uninitialized memory returns the pattern
+/// assert_eq!(mem.read_byte(SUPERVISOR_DATA, 0), 0xDE);
+/// assert_eq!(mem.read_byte(SUPERVISOR_DATA, 1), 0xAD);
+///
+/// // Write some data
+/// mem.write_long(SUPERVISOR_DATA, 0x1000, 0x12345678);
+///
+/// // Read it back
+/// assert_eq!(mem.read_long(SUPERVISOR_DATA, 0x1000), 0x12345678);
+/// ```
 pub struct PagedMem {
     pages: HashMap<u32, Page>,
+    /// The 4-byte pattern used for uninitialized memory.
     pub initializer: u32,
 }
 
@@ -50,6 +85,9 @@ impl PagedMem {
         };
         ((self.initializer >> shift) & 0xFF) as u8
     }
+    /// Reads a byte from the given address.
+    ///
+    /// Returns the initializer pattern byte if the address hasn't been written to.
     pub fn read_u8(&self, address: u32) -> u32 {
         let pageno = address & PAGE_MASK;
         if let Some(page) = self.pages.get(&pageno) {
@@ -60,12 +98,19 @@ impl PagedMem {
         }
     }
 
+    /// Writes a byte to the given address.
+    ///
+    /// Only allocates a page if the value differs from the initializer pattern.
     pub fn write_u8(&mut self, address: u32, value: u32) {
         if let Some(page) = self.page_if_needed(address, value as u8) {
             let index = (address & ADDR_MASK) as usize;
             page[index] = (value & 0xFF) as u8;
         }
     }
+
+    /// Returns an iterator over all written (non-default) memory locations.
+    ///
+    /// Useful for serializing or comparing memory state.
     pub fn diffs(&self) -> DiffIter<'_> {
         let mut keys: Vec<u32> = self.pages.keys().cloned().collect();
         keys.sort();
@@ -74,6 +119,26 @@ impl PagedMem {
 }
 
 impl PagedMem {
+    /// Creates a new paged memory with the given initializer pattern.
+    ///
+    /// The initializer is a 4-byte pattern that repeats across the address space.
+    /// Reading uninitialized memory returns bytes from this pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `initializer` - 4-byte pattern for uninitialized memory (e.g., `0x00000000` or `0xDEADBEEF`)
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use r68k::ram::PagedMem;
+    ///
+    /// // Memory initialized to zeros
+    /// let mem = PagedMem::new(0x00000000);
+    ///
+    /// // Memory initialized to a debug pattern
+    /// let debug_mem = PagedMem::new(0xDEADBEEF);
+    /// ```
     pub fn new(initializer: u32) -> PagedMem {
         PagedMem { pages: HashMap::new(), initializer }
     }

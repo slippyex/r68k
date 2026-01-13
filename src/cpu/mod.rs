@@ -1,101 +1,348 @@
-// type alias for exception handling
+//! CPU emulation core for the Motorola 68000.
+//!
+//! This module provides the main CPU emulation logic including:
+//! - [`ConfiguredCore`] - The main CPU struct parameterized over memory and interrupt controller
+//! - [`Core`] - Trait defining the CPU interface for instruction handlers
+//! - [`Cycles`] - Wrapper type for cycle counting
+//! - [`Exception`] - CPU exceptions (traps, interrupts, errors)
+//! - [`ProcessingState`] - Current CPU execution state
+//!
+//! # Example
+//!
+//! ```rust
+//! use r68k::cpu::ConfiguredCore;
+//! use r68k::ram::PagedMem;
+//! use r68k::interrupts::AutoInterruptController;
+//!
+//! let memory = PagedMem::new(0);
+//! let mut cpu = ConfiguredCore::new_with(0, AutoInterruptController::new(), memory);
+//! cpu.reset();
+//! let cycles = cpu.execute(100);
+//! ```
+
 use std::result;
+
+/// Result type for CPU operations that may raise exceptions.
 pub type Result<T> = result::Result<T, Exception>;
+
 use crate::interrupts::{InterruptController, AutoInterruptController, SPURIOUS_INTERRUPT};
 use crate::ram::loggingmem::{LoggingMem, OpsLogger};
+
+/// Test-only CPU configuration with logging memory. Not part of the public API.
+#[cfg(test)]
 pub type TestCore = ConfiguredCore<AutoInterruptController, LoggingMem<OpsLogger>>;
+
+#[cfg(not(test))]
+pub(crate) type TestCore = ConfiguredCore<AutoInterruptController, LoggingMem<OpsLogger>>;
+
+/// Function signature for instruction handlers.
+///
+/// Each handler takes a mutable reference to a [`Core`] implementation
+/// and returns the number of cycles consumed, or an exception.
 pub type Handler<T> = fn(&mut T) -> Result<Cycles>;
+
+/// The complete instruction set as a vector of 65536 handlers (one per opcode).
 pub type InstructionSet<T> = Vec<Handler<T>>;
-use crate::ram::{AddressBus, SUPERVISOR_PROGRAM, SUPERVISOR_DATA, USER_PROGRAM, USER_DATA};
+
+use crate::ram::{AddressBus, PagedMem, SUPERVISOR_PROGRAM, SUPERVISOR_DATA, USER_PROGRAM, USER_DATA};
+
+/// A standard CPU configuration with paged memory and autovectored interrupts.
+///
+/// This is the most common configuration for basic 68000 emulation.
+/// Use this type alias when you don't need custom memory or interrupt handling.
+///
+/// # Example
+///
+/// ```rust
+/// use r68k::cpu::Cpu;
+///
+/// let mut cpu = Cpu::new(0);
+/// cpu.reset();
+/// cpu.execute(1000);
+/// ```
+pub type Cpu = ConfiguredCore<AutoInterruptController, PagedMem>;
+
+impl Cpu {
+    /// Creates a new CPU with paged memory and autovectored interrupts.
+    ///
+    /// This is a convenience constructor that creates a ready-to-use CPU
+    /// with default memory (initialized to the given pattern) and
+    /// standard autovectored interrupt handling.
+    ///
+    /// # Arguments
+    ///
+    /// * `initializer` - The 4-byte pattern for uninitialized memory (e.g., `0` or `0xDEADBEEF`)
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use r68k::cpu::Cpu;
+    ///
+    /// // Create CPU with zeroed memory
+    /// let mut cpu = Cpu::new(0);
+    ///
+    /// // Or with a debug pattern
+    /// let mut debug_cpu = Cpu::new(0xDEADBEEF);
+    ///
+    /// cpu.reset();
+    /// ```
+    pub fn new(initializer: u32) -> Cpu {
+        ConfiguredCore::new_with(0, AutoInterruptController::new(), PagedMem::new(initializer))
+    }
+}
+
 pub mod ops;
 mod effective_address;
 mod operator;
 
+/// Core CPU interface used by instruction handlers and exception callbacks.
+///
+/// This trait provides access to CPU registers, memory operations, and status flags.
+/// It is implemented by [`ConfiguredCore`] and used internally by instruction handlers.
+///
+/// # For Callback Implementors
+///
+/// When implementing [`Callbacks`], you'll receive a `&mut impl Core`. The most useful
+/// methods for callbacks are:
+///
+/// - **Register access**: [`pc()`](Self::pc), [`dar()`](Self::dar)
+/// - **Status**: [`status_register()`](Self::status_register), [`condition_code_register()`](Self::condition_code_register)
+/// - **Memory**: [`read_data_byte()`](Self::read_data_byte), [`write_data_byte()`](Self::write_data_byte), etc.
+///
+/// Most other methods are internal implementation details for instruction handlers.
+///
+/// # Register Layout
+///
+/// The 68000 has 8 data registers (D0-D7) and 8 address registers (A0-A7),
+/// stored contiguously in the `dar` array:
+/// - Indices 0-7: D0-D7 (data registers)
+/// - Indices 8-15: A0-A7 (address registers)
+/// - Index 15 (A7): Active stack pointer
+///
+/// # Memory Access
+///
+/// Memory operations are split by address space (program/data) and access mode (supervisor/user).
+/// All memory reads return `u32` for uniformity; byte and word values are zero-extended.
 pub trait Core {
-    fn pc(&mut self) -> &mut  u32;
+    // === Primary methods for external use ===
+
+    /// Returns a mutable reference to the program counter.
+    fn pc(&mut self) -> &mut u32;
+
+    /// Returns the current instruction register (opcode being executed).
     fn ir(&mut self) -> u16;
-    fn ax(&mut self) -> &mut  u32;
-    fn ay(&mut self) -> &mut  u32;
-    fn dx(&mut self) -> &mut  u32;
-    fn dy(&mut self) -> &mut  u32;
-    fn c_flag(&mut self) -> &mut u32;
-    fn v_flag(&mut self) -> &mut u32;
-    fn n_flag(&mut self) -> &mut u32;
-    fn s_flag(&mut self) -> &mut u32;
-    fn x_flag(&mut self) -> &mut u32;
-    fn not_z_flag(&mut self) -> &mut u32;
-    fn x_flag_as_1(&self) -> u32;
+
+    /// Returns a mutable reference to all data and address registers.
+    ///
+    /// Layout: D0-D7 at indices 0-7, A0-A7 at indices 8-15.
     fn dar(&mut self) -> &mut [u32; 16];
-    fn read_data_byte(&mut self, address: u32) -> Result<u32>;
-    fn read_data_word(&mut self, address: u32) -> Result<u32>;
-    fn read_data_long(&mut self, address: u32) -> Result<u32>;
-    fn read_program_byte(&mut self, address: u32) -> Result<u32>;
-    fn read_program_word(&mut self, address: u32) -> Result<u32>;
-    fn read_program_long(&mut self, address: u32) -> Result<u32>;
-    fn write_data_byte(&mut self, address: u32, value: u32) -> Result<()>;
-    fn write_data_word(&mut self, address: u32, value: u32) -> Result<()>;
-    fn write_data_long(&mut self, address: u32, value: u32) -> Result<()>;
-    fn write_program_byte(&mut self, address: u32, value: u32) -> Result<()>;
-    fn write_program_word(&mut self, address: u32, value: u32) -> Result<()>;
-    fn write_program_long(&mut self, address: u32, value: u32) -> Result<()>;
+
+    /// Returns the full 16-bit status register value.
     fn status_register(&self) -> u16;
+
+    /// Returns the condition code register (lower 8 bits of SR).
     fn condition_code_register(&self) -> u16;
+
+    /// Sets flags from a status register value.
     fn sr_to_flags(&mut self, sr: u16);
+
+    /// Sets flags from a condition code register value.
     fn ccr_to_flags(&mut self, ccr: u16);
+
+    // === Memory access methods ===
+
+    /// Reads a byte from data space.
+    fn read_data_byte(&mut self, address: u32) -> Result<u32>;
+    /// Reads a word (16-bit) from data space.
+    fn read_data_word(&mut self, address: u32) -> Result<u32>;
+    /// Reads a long (32-bit) from data space.
+    fn read_data_long(&mut self, address: u32) -> Result<u32>;
+    /// Reads a byte from program space.
+    fn read_program_byte(&mut self, address: u32) -> Result<u32>;
+    /// Reads a word from program space.
+    fn read_program_word(&mut self, address: u32) -> Result<u32>;
+    /// Reads a long from program space.
+    fn read_program_long(&mut self, address: u32) -> Result<u32>;
+    /// Writes a byte to data space.
+    fn write_data_byte(&mut self, address: u32, value: u32) -> Result<()>;
+    /// Writes a word to data space.
+    fn write_data_word(&mut self, address: u32, value: u32) -> Result<()>;
+    /// Writes a long to data space.
+    fn write_data_long(&mut self, address: u32, value: u32) -> Result<()>;
+    /// Writes a byte to program space.
+    fn write_program_byte(&mut self, address: u32, value: u32) -> Result<()>;
+    /// Writes a word to program space.
+    fn write_program_word(&mut self, address: u32, value: u32) -> Result<()>;
+    /// Writes a long to program space.
+    fn write_program_long(&mut self, address: u32, value: u32) -> Result<()>;
+
+    // === Internal methods (used by instruction handlers) ===
+
+    #[doc(hidden)]
+    fn ax(&mut self) -> &mut u32;
+    #[doc(hidden)]
+    fn ay(&mut self) -> &mut u32;
+    #[doc(hidden)]
+    fn dx(&mut self) -> &mut u32;
+    #[doc(hidden)]
+    fn dy(&mut self) -> &mut u32;
+    #[doc(hidden)]
+    fn c_flag(&mut self) -> &mut u32;
+    #[doc(hidden)]
+    fn v_flag(&mut self) -> &mut u32;
+    #[doc(hidden)]
+    fn n_flag(&mut self) -> &mut u32;
+    #[doc(hidden)]
+    fn s_flag(&mut self) -> &mut u32;
+    #[doc(hidden)]
+    fn x_flag(&mut self) -> &mut u32;
+    #[doc(hidden)]
+    fn not_z_flag(&mut self) -> &mut u32;
+    #[doc(hidden)]
+    fn x_flag_as_1(&self) -> u32;
+    #[doc(hidden)]
     fn cond_t(&self) -> bool;
+    #[doc(hidden)]
     fn cond_f(&self) -> bool;
+    #[doc(hidden)]
     fn cond_hi(&self) -> bool;
+    #[doc(hidden)]
     fn cond_ls(&self) -> bool;
+    #[doc(hidden)]
     fn cond_cc(&self) -> bool;
+    #[doc(hidden)]
     fn cond_cs(&self) -> bool;
+    #[doc(hidden)]
     fn cond_ne(&self) -> bool;
+    #[doc(hidden)]
     fn cond_eq(&self) -> bool;
+    #[doc(hidden)]
     fn cond_vc(&self) -> bool;
+    #[doc(hidden)]
     fn cond_vs(&self) -> bool;
+    #[doc(hidden)]
     fn cond_pl(&self) -> bool;
+    #[doc(hidden)]
     fn cond_mi(&self) -> bool;
+    #[doc(hidden)]
     fn cond_ge(&self) -> bool;
+    #[doc(hidden)]
     fn cond_lt(&self) -> bool;
+    #[doc(hidden)]
     fn cond_gt(&self) -> bool;
+    #[doc(hidden)]
     fn cond_le(&self) -> bool;
+    #[doc(hidden)]
     fn branch_8(&mut self, offset: i8);
+    #[doc(hidden)]
     fn branch_16(&mut self, offset: i16);
+    #[doc(hidden)]
     fn read_imm_i16(&mut self) -> Result<i16>;
+    #[doc(hidden)]
     fn read_imm_u16(&mut self) -> Result<u16>;
+    #[doc(hidden)]
     fn read_imm_u32(&mut self) -> Result<u32>;
+    #[doc(hidden)]
     fn jump(&mut self, pc: u32);
+    #[doc(hidden)]
     fn push_32(&mut self, value: u32) -> u32;
+    #[doc(hidden)]
     fn pop_32(&mut self) -> u32;
+    #[doc(hidden)]
     fn push_16(&mut self, value: u16) -> u32;
+    #[doc(hidden)]
     fn pop_16(&mut self) -> u16;
+    #[doc(hidden)]
     fn push_sp(&mut self) -> u32;
+    #[doc(hidden)]
     fn inactive_ssp(&self) -> u32;
+    #[doc(hidden)]
     fn inactive_usp(&mut self) -> &mut u32;
+    #[doc(hidden)]
     fn reset_external_devices(&mut self);
+    #[doc(hidden)]
     fn resume_normal_processing(&mut self);
+    #[doc(hidden)]
     fn stop_instruction_processing(&mut self);
+    #[doc(hidden)]
     fn allow_tas_writeback(&mut self) -> bool;
 }
 
+/// The main 68000 CPU emulator, parameterized over memory and interrupt controller.
+///
+/// `ConfiguredCore` is the primary type for running 68000 code. It holds all CPU state
+/// including registers, flags, and references to the memory system and interrupt controller.
+///
+/// # Type Parameters
+///
+/// - `T`: The interrupt controller type, implementing [`InterruptController`](crate::interrupts::InterruptController)
+/// - `A`: The memory/address bus type, implementing [`AddressBus`](crate::ram::AddressBus)
+///
+/// # Example
+///
+/// ```rust
+/// use r68k::cpu::ConfiguredCore;
+/// use r68k::ram::PagedMem;
+/// use r68k::interrupts::AutoInterruptController;
+///
+/// // Create CPU with paged memory and autovectored interrupts
+/// let memory = PagedMem::new(0);
+/// let mut cpu = ConfiguredCore::new_with(0, AutoInterruptController::new(), memory);
+///
+/// // Reset loads initial SSP and PC from vectors at address 0
+/// cpu.reset();
+///
+/// // Execute for up to 1000 cycles
+/// let cycles_used = cpu.execute(1000);
+/// println!("Executed {} cycles, PC now at {:08X}", cycles_used.0, cpu.pc);
+/// ```
+///
+/// # CPU State
+///
+/// The CPU state is exposed via public fields for inspection and modification:
+/// - `pc`: Program counter
+/// - `dar`: Data and address registers (D0-D7 at indices 0-7, A0-A7 at indices 8-15)
+/// - `processing_state`: Current execution state
+/// - `mem`: The memory system
+/// - `int_ctrl`: The interrupt controller
 pub struct ConfiguredCore<T: InterruptController, A: AddressBus> {
+    /// Program counter - address of next instruction to fetch.
     pub pc: u32,
-    pub inactive_ssp: u32, // when in user mode
-    pub inactive_usp: u32, // when in supervisor mode
+    /// Inactive supervisor stack pointer (stored when in user mode).
+    pub inactive_ssp: u32,
+    /// Inactive user stack pointer (stored when in supervisor mode).
+    pub inactive_usp: u32,
+    /// Instruction register - the currently executing opcode.
     pub ir: u16,
+    /// Data and address registers. D0-D7 at indices 0-7, A0-A7 at indices 8-15.
+    /// A7 (index 15) is the active stack pointer.
     pub dar: [u32; 16],
     instruction_set: InstructionSet<ConfiguredCore<T, A>>,
+    /// Supervisor flag (non-zero = supervisor mode).
     pub s_flag: u32,
+    /// Current interrupt request level being processed.
     pub irq_level: u8,
+    /// Interrupt priority mask from status register.
     pub int_mask: u32,
+    /// The interrupt controller.
     pub int_ctrl: T,
+    /// Extend flag (used for multi-precision arithmetic).
     pub x_flag: u32,
+    /// Carry flag.
     pub c_flag: u32,
+    /// Overflow flag.
     pub v_flag: u32,
+    /// Negative flag.
     pub n_flag: u32,
+    /// Prefetch buffer address.
     pub prefetch_addr: u32,
+    /// Prefetch buffer data.
     pub prefetch_data: u32,
+    /// Zero flag (stored inverted: 0 means Z is set).
     pub not_z_flag: u32,
+    /// Current processing state.
     pub processing_state: ProcessingState,
+    /// The memory/address bus.
     pub mem: A,
 }
 impl<T: InterruptController, A: AddressBus> Core for ConfiguredCore<T, A> {
@@ -308,8 +555,23 @@ impl<T: InterruptController, A: AddressBus> Core for ConfiguredCore<T, A> {
         true
     }
 }
+/// Index of the stack pointer register (A7) in the `dar` array.
 pub const STACK_POINTER_REG: usize = 15;
 
+/// Represents CPU cycle counts for timing-accurate emulation.
+///
+/// The 68000 executes instructions in a specific number of clock cycles.
+/// This type wraps cycle counts and provides arithmetic operations.
+///
+/// # Example
+///
+/// ```rust
+/// use r68k::cpu::Cycles;
+///
+/// let cycles = Cycles(100);
+/// let remaining = cycles - Cycles(40);
+/// assert_eq!(remaining.0, 60);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Cycles(pub i32);
 
@@ -335,7 +597,39 @@ impl Cycles {
     }
 }
 
+/// Trait for intercepting CPU exceptions during execution.
+///
+/// Implement this trait to handle exceptions (traps, interrupts, errors) in custom ways.
+/// This is useful for implementing OS traps, debuggers, or custom I/O handling.
+///
+/// # Example
+///
+/// ```rust
+/// use r68k::cpu::{Callbacks, Core, Cycles, Exception, Result};
+///
+/// struct TrapHandler {
+///     trap_count: usize,
+/// }
+///
+/// impl Callbacks for TrapHandler {
+///     fn exception_callback(&mut self, _core: &mut impl Core, ex: Exception) -> Result<Cycles> {
+///         match ex {
+///             Exception::Trap(num, _) => {
+///                 self.trap_count += 1;
+///                 // Handle the trap ourselves, consuming 40 cycles
+///                 Ok(Cycles(40))
+///             }
+///             // Let the CPU handle all other exceptions normally
+///             _ => Err(ex),
+///         }
+///     }
+/// }
+/// ```
 pub trait Callbacks {
+    /// Called when an exception occurs during instruction execution.
+    ///
+    /// Return `Ok(Cycles)` to handle the exception yourself (consuming the specified cycles),
+    /// or `Err(ex)` to let the CPU handle it via its normal exception processing.
     fn exception_callback(&mut self, core: &mut impl Core, ex: Exception) -> Result<Cycles>;
 }
 
@@ -346,14 +640,28 @@ impl Callbacks for EmulateAllExceptions {
     }
 }
 
+/// The current execution state of the CPU.
+///
+/// The 68000 processes exceptions in groups with different priorities:
+/// - **Group 0** (highest priority): Reset, Bus Error, Address Error
+/// - **Group 1**: Trace, Interrupt, Illegal Instruction, Privilege Violation
+/// - **Group 2**: TRAP, TRAPV, CHK, Zero Divide
+///
+/// The CPU can also be in special non-executing states (Stopped or Halted).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ProcessingState {
-    Normal,             // Executing instructions
-    Group2Exception,    // TRAP(V), CHK, ZeroDivide
-    Group1Exception,    // Trace, Interrupt, IllegalInstruction, PrivilegeViolation
-    Group0Exception,    // AddressError, BusError, ExternalReset
-    Stopped,            // Trace, Interrupt or ExternalReset needed to resume
-    Halted,             // ExternalReset needed to resume
+    /// Normal instruction execution.
+    Normal,
+    /// Processing a Group 2 exception (TRAP, TRAPV, CHK, Zero Divide).
+    Group2Exception,
+    /// Processing a Group 1 exception (Trace, Interrupt, Illegal Instruction, Privilege Violation).
+    Group1Exception,
+    /// Processing a Group 0 exception (Address Error, Bus Error, Reset).
+    Group0Exception,
+    /// CPU is stopped via STOP instruction. Resumes on interrupt or reset.
+    Stopped,
+    /// CPU is halted due to double fault. Only external reset can resume.
+    Halted,
 }
 
 impl ProcessingState {
@@ -369,18 +677,61 @@ impl ProcessingState {
     }
 }
 
+/// Type of memory access that caused an exception.
 #[derive(Clone, Copy, Debug)]
-pub enum AccessType {Read, Write}
+pub enum AccessType {
+    /// Memory read operation.
+    Read,
+    /// Memory write operation.
+    Write,
+}
 use crate::ram::AddressSpace;
 
+/// CPU exceptions that can occur during instruction execution.
+///
+/// Exceptions are the 68000's mechanism for handling errors, traps, and interrupts.
+/// When an exception occurs, the CPU saves state to the stack and vectors to a handler.
+///
+/// # Exception Vectors
+///
+/// Each exception type has an associated vector number. The vector address is
+/// calculated as `vector_number * 4`, pointing to the exception handler address
+/// in the vector table at the start of memory.
 #[derive(Clone, Copy, Debug)]
 pub enum Exception {
-    AddressError { address: u32, access_type: AccessType, processing_state: ProcessingState, address_space: AddressSpace},
-    IllegalInstruction(u16, u32), // ir, pc
-    Trap(u8, i32),                // trap no, exception cycles
-    PrivilegeViolation(u16, u32), // ir, pc
-    UnimplementedInstruction(u16, u32, u8), // ir, pc, vector no
-    Interrupt(u8, u8), // irq, vector no
+    /// Address error: word/long access at odd address.
+    ///
+    /// Contains the faulting address, access type, CPU state, and address space.
+    AddressError {
+        /// The odd address that caused the error.
+        address: u32,
+        /// Whether the access was a read or write.
+        access_type: AccessType,
+        /// CPU state when the error occurred.
+        processing_state: ProcessingState,
+        /// The address space (user/supervisor, program/data).
+        address_space: AddressSpace,
+    },
+    /// Illegal instruction encountered.
+    ///
+    /// Fields: (instruction_register, program_counter)
+    IllegalInstruction(u16, u32),
+    /// TRAP instruction executed.
+    ///
+    /// Fields: (trap_vector, cycles_for_ea_calculation)
+    Trap(u8, i32),
+    /// Privileged instruction executed in user mode.
+    ///
+    /// Fields: (instruction_register, program_counter)
+    PrivilegeViolation(u16, u32),
+    /// Unimplemented instruction (A-line or F-line).
+    ///
+    /// Fields: (instruction_register, program_counter, vector_number)
+    UnimplementedInstruction(u16, u32, u8),
+    /// Hardware interrupt.
+    ///
+    /// Fields: (interrupt_level, vector_number)
+    Interrupt(u8, u8),
 }
 use std::fmt;
 impl fmt::Display for Exception {
@@ -480,6 +831,29 @@ impl TestCore {
 }
 
 impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
+    /// Creates a new CPU with the given interrupt controller and memory.
+    ///
+    /// The CPU starts in supervisor mode with an uninitialized state.
+    /// Call [`reset()`](Self::reset) to properly initialize the CPU by loading
+    /// the initial stack pointer and program counter from the reset vectors.
+    ///
+    /// # Arguments
+    ///
+    /// * `base` - Initial program counter value (typically 0, will be overwritten by reset)
+    /// * `int_ctrl` - The interrupt controller to use
+    /// * `memory` - The memory/address bus implementation
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use r68k::cpu::ConfiguredCore;
+    /// use r68k::ram::PagedMem;
+    /// use r68k::interrupts::AutoInterruptController;
+    ///
+    /// let memory = PagedMem::new(0);
+    /// let mut cpu = ConfiguredCore::new_with(0, AutoInterruptController::new(), memory);
+    /// cpu.reset();
+    /// ```
     pub fn new_with(base: u32, int_ctrl: T, memory: A) -> ConfiguredCore<T, A> {
         ConfiguredCore {
             pc: base, prefetch_addr: 0, prefetch_data: 0, inactive_ssp: 0, inactive_usp: 0, ir: 0, processing_state: ProcessingState::Group0Exception,
@@ -488,6 +862,17 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
             s_flag: SFLAG_SET, int_mask: CPU_SR_INT_MASK, x_flag: 0, v_flag: 0, c_flag: 0, n_flag: 0, not_z_flag: 0xffff_ffff
         }
     }
+
+    /// Performs a CPU reset, loading initial SSP and PC from the vector table.
+    ///
+    /// This simulates a hardware reset:
+    /// 1. Enters supervisor mode
+    /// 2. Sets interrupt mask to highest priority
+    /// 3. Reads initial SSP from address 0x000000
+    /// 4. Reads initial PC from address 0x000004
+    /// 5. Enters normal processing state
+    ///
+    /// The memory must contain valid reset vectors at addresses 0-7.
     pub fn reset(&mut self) {
         self.processing_state = ProcessingState::Group0Exception;
         self.s_flag = SFLAG_SET;
@@ -500,12 +885,22 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
         self.jump(new_pc);
         self.processing_state = ProcessingState::Normal;
     }
+    /// Returns the extend flag as 0 or 1.
     pub fn x_flag_as_1(&self) -> u32 {
         (self.x_flag>>8)&1
     }
-    // admittely I've chosen to reuse Musashi's representation of flags
-    // which I don't fully understand (they are not matching their
-    // positions in the SR/CCR)
+
+    /// Returns the full 16-bit status register value.
+    ///
+    /// The status register contains:
+    /// - Bits 15-13: Trace mode (T1, T0) and reserved
+    /// - Bit 13: Supervisor mode (S)
+    /// - Bits 10-8: Interrupt priority mask (I2, I1, I0)
+    /// - Bit 4: Extend flag (X)
+    /// - Bit 3: Negative flag (N)
+    /// - Bit 2: Zero flag (Z)
+    /// - Bit 1: Overflow flag (V)
+    /// - Bit 0: Carry flag (C)
     pub fn status_register(&self) -> u16 {
         ((self.s_flag << 11)                |
         self.int_mask                        |
@@ -515,9 +910,16 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
         ((self.v_flag & VFLAG_SET) >> 6)    |
         ((self.c_flag & CFLAG_SET) >> 8)) as u16
     }
+    /// Returns the condition code register (lower 8 bits of status register).
+    ///
+    /// Contains: X, N, Z, V, C flags.
     pub fn condition_code_register(&self) -> u16 {
         self.status_register() & 0xff
     }
+
+    /// Returns the current user stack pointer value.
+    ///
+    /// In supervisor mode, returns the saved USP. In user mode, returns A7.
     pub fn usp(&self) -> u32 {
         if self.s_flag > 0 {
             self.inactive_usp
@@ -525,6 +927,10 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
             self.dar[15]
         }
     }
+
+    /// Returns the current supervisor stack pointer value.
+    ///
+    /// In supervisor mode, returns A7. In user mode, returns the saved SSP.
     pub fn ssp(&self) -> u32 {
         if self.s_flag > 0 {
             self.dar[15]
@@ -532,9 +938,11 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
             self.inactive_ssp
         }
     }
-    // admittely I've chosen to reuse Musashi's representation of flags
-    // which I don't fully understand (they are not matching their
-    // positions in the SR/CCR)
+
+    /// Sets CPU flags from a status register value.
+    ///
+    /// This updates all flags and the interrupt mask from the given SR value.
+    /// If the supervisor bit changes, the stack pointers are swapped.
     pub fn sr_to_flags(&mut self, sr: u16) {
         let sr = u32::from(sr & CPU_SR_MASK);
         let old_sflag = self.s_flag;
@@ -556,11 +964,22 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
         }
         // println!("{} {:016b} {} {}", self.flags(), sr, self.not_z_flag, sr & 0b00100);
     }
+    /// Sets CPU flags from a condition code register value.
+    ///
+    /// Only updates the lower 8 bits (X, N, Z, V, C), preserving the upper byte.
     pub fn ccr_to_flags(&mut self, ccr: u16) {
         let sr = self.status_register();
         self.sr_to_flags((sr & 0xff00) | (ccr & 0xff));
     }
 
+    /// Returns a human-readable string representation of the current flags.
+    ///
+    /// Format: `-S7XNZVC` where:
+    /// - S/U: Supervisor/User mode
+    /// - 0-7: Interrupt priority mask
+    /// - X, N, Z, V, C: Flag letters if set, `-` if clear
+    ///
+    /// Example: `-S7X-Z--` means supervisor mode, mask 7, X and Z flags set.
     pub fn flags(&self) -> String {
         let sr = self.status_register();
         let supervisor = (sr >> 13) & 1;
@@ -855,12 +1274,79 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
             self.read_imm_u16()
         }
     }
+    /// Executes a single instruction.
+    ///
+    /// This is a convenience method equivalent to `execute(1)`.
+    /// Returns the number of cycles consumed by the instruction.
     pub fn execute1(&mut self) -> Cycles {
         self.execute(1)
     }
+
+    /// Executes instructions for up to the specified number of cycles.
+    ///
+    /// The CPU will execute instructions until the cycle budget is exhausted
+    /// or the CPU enters a non-running state (Stopped or Halted).
+    ///
+    /// # Arguments
+    ///
+    /// * `cycles` - Maximum number of cycles to execute
+    ///
+    /// # Returns
+    ///
+    /// The actual number of cycles consumed. This may exceed the requested
+    /// amount if the last instruction takes more cycles than remaining.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use r68k::cpu::ConfiguredCore;
+    /// use r68k::ram::PagedMem;
+    /// use r68k::interrupts::AutoInterruptController;
+    ///
+    /// let memory = PagedMem::new(0);
+    /// let mut cpu = ConfiguredCore::new_with(0, AutoInterruptController::new(), memory);
+    /// cpu.reset();
+    ///
+    /// // Execute for approximately 1000 cycles
+    /// let actual_cycles = cpu.execute(1000);
+    /// println!("Consumed {} cycles", actual_cycles.0);
+    /// ```
     pub fn execute(&mut self, cycles: i32) -> Cycles {
         self.execute_with_state(cycles, &mut EmulateAllExceptions)
     }
+
+    /// Executes instructions with custom exception handling.
+    ///
+    /// Like [`execute()`](Self::execute), but allows intercepting exceptions
+    /// via a [`Callbacks`] implementation. This is useful for implementing
+    /// OS traps, debuggers, or custom I/O.
+    ///
+    /// # Arguments
+    ///
+    /// * `cycles` - Maximum number of cycles to execute
+    /// * `state` - A [`Callbacks`] implementation for exception handling
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use r68k::cpu::{ConfiguredCore, Callbacks, Core, Cycles, Exception, Result};
+    /// use r68k::ram::PagedMem;
+    /// use r68k::interrupts::AutoInterruptController;
+    ///
+    /// struct MyHandler;
+    /// impl Callbacks for MyHandler {
+    ///     fn exception_callback(&mut self, _: &mut impl Core, ex: Exception) -> Result<Cycles> {
+    ///         Err(ex) // Let CPU handle all exceptions
+    ///     }
+    /// }
+    ///
+    /// let memory = PagedMem::new(0);
+    /// let mut cpu = ConfiguredCore::new_with(0, AutoInterruptController::new(), memory);
+    /// cpu.reset();
+    ///
+    /// let mut handler = MyHandler;
+    /// cpu.execute_with_state(1000, &mut handler);
+    /// ```
     pub fn execute_with_state<S: Callbacks>(&mut self, cycles: i32, state: &mut S) -> Cycles {
         let cycles = Cycles(cycles);
         let mut remaining_cycles = cycles;
