@@ -117,9 +117,7 @@ The r68k emulator implements the original 68000 instruction set. It does not sup
 
 ## Changelog
 
-### v0.2.0 (2025)
-
-**Modernization:**
+### v0.2.0 (202666666Modernization:**
 - Updated to Rust Edition 2021
 - Consolidated into single `r68k` crate (merged r68k-common into r68k)
 - Fixed all Clippy warnings

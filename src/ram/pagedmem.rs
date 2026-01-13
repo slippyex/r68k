@@ -66,7 +66,7 @@ impl PagedMem {
             page[index] = (value & 0xFF) as u8;
         }
     }
-    pub fn diffs(&self) -> DiffIter {
+    pub fn diffs(&self) -> DiffIter<'_> {
         let mut keys: Vec<u32> = self.pages.keys().cloned().collect();
         keys.sort();
         DiffIter { pages: &self.pages, keys, offset: 0 }

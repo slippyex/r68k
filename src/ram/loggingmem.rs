@@ -75,7 +75,7 @@ impl<T: OpsLogging> LoggingMem<T> {
     pub fn write_u8(&mut self, address: u32, value: u32) {
         self.mem.write_u8(address, value)
     }
-    pub fn diffs(&self) -> DiffIter {
+    pub fn diffs(&self) -> DiffIter<'_> {
         self.mem.diffs()
     }
 }
