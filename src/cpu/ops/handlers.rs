@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use r68k_common::constants::*;
+use crate::common::constants::*;
 use super::super::Handler;
 use super::opcodes::*;
 use super::super::InstructionSet;
@@ -1904,7 +1904,7 @@ fn generate_optable<T: Core>() -> Vec<OpcodeHandler<T>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cpu::TestCore;
+    use crate::cpu::TestCore;
     
     #[test]
     fn optable_mask_and_matching_makes_sense() {

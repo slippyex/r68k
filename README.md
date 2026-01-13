@@ -1,84 +1,156 @@
 # r68k
 
-r68k is a emulator for the m68k written in Rust, as a port of [Karl Stenerud's Musashi](https://github.com/kstenerud/Musashi). Musashi "has been successfully running in the MAME project (www.mame.net) for years
-and so has had time to mature." - so unlike most other emulators Musashi is of proven quality to run complex real-world m68k software, which I thought was a good foundation to build on.
+[![Crates.io](https://img.shields.io/crates/v/r68k.svg)](https://crates.io/crates/r68k)
+[![Documentation](https://docs.rs/r68k/badge.svg)](https://docs.rs/r68k)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-The end goal for r68k is to have a complete m68k emulation lib, comparable with Musashi in speed and functionality, which I might later use to build a _virtual retro computer_ in Rust - a project I have not even started on yet (or, well, I have some code, but I got tired of C++, and was inspired enough by Rust to start over). It's built from the start to be able to operate multiple cores independently, with their own RAM, because eventually I want to emulate _several_ independent retro computers in the same process, for an even more ambitious, will-never-see-the-light-of-day, still-very-fuzzy-around-the-edges first-person-hacking gaming idea vaugely inspired by [0x10c](https://en.wikipedia.org/wiki/0x10c). There. I said it. Now mock me! But at least I'll get to learn Rust. And failure. But Rust is good!
+r68k is an emulator for the Motorola 68000 CPU written in Rust, ported from [Karl Stenerud's Musashi](https://github.com/kstenerud/Musashi). Musashi "has been successfully running in the MAME project (www.mame.net) for years and so has had time to mature." - so unlike most other emulators Musashi is of proven quality to run complex real-world m68k software, which makes it a solid foundation.
 
-## Project Layout
+## Features
 
-    common => r68k_common
-        constants       common opcode constants
-    emu => r68k_emu
-        cpu             Motorola 68000 emulation
-        musashi         Musashi integration tests
-    tools => r68k_tools
-        assembler       simple assembler
-        disassembler    simple disassembler
-        srecords        support for Motorola SRecord format
+- Complete 68000 instruction set implementation
+- Cycle-accurate emulation verified against Musashi
+- Support for autovectored interrupts
+- STOP and HALT states properly emulated
+- Host callbacks for RESET instruction and exception overrides
+- Flexible memory interface via `AddressBus` trait
+- No external dependencies for the core emulator
+
+## Installation
+
+Add this to your `Cargo.toml`:
+
+```toml
+[dependencies]
+r68k = "0.2"
+```
+
+## Quick Start
+
+```rust
+use r68k::cpu::{ConfiguredCore, ProcessingState};
+use r68k::interrupts::AutoInterruptController;
+use r68k::ram::{AddressBus, AddressSpace};
+
+// Implement the AddressBus trait for your memory system
+#[derive(Clone)]
+struct SimpleMemory {
+    ram: Vec<u8>,
+}
+
+impl AddressBus for SimpleMemory {
+    fn copy_from(&mut self, other: &Self) {
+        self.ram = other.ram.clone();
+    }
+
+    fn read_byte(&self, _space: AddressSpace, addr: u32) -> u32 {
+        self.ram.get(addr as usize).copied().unwrap_or(0) as u32
+    }
+
+    fn read_word(&self, space: AddressSpace, addr: u32) -> u32 {
+        let hi = self.read_byte(space, addr);
+        let lo = self.read_byte(space, addr.wrapping_add(1));
+        (hi << 8) | lo
+    }
+
+    fn read_long(&self, space: AddressSpace, addr: u32) -> u32 {
+        let hi = self.read_word(space, addr);
+        let lo = self.read_word(space, addr.wrapping_add(2));
+        (hi << 16) | lo
+    }
+
+    fn write_byte(&mut self, _space: AddressSpace, addr: u32, value: u32) {
+        if let Some(cell) = self.ram.get_mut(addr as usize) {
+            *cell = value as u8;
+        }
+    }
+
+    fn write_word(&mut self, space: AddressSpace, addr: u32, value: u32) {
+        self.write_byte(space, addr, value >> 8);
+        self.write_byte(space, addr.wrapping_add(1), value & 0xFF);
+    }
+
+    fn write_long(&mut self, space: AddressSpace, addr: u32, value: u32) {
+        self.write_word(space, addr, value >> 16);
+        self.write_word(space, addr.wrapping_add(2), value & 0xFFFF);
+    }
+}
+
+fn main() {
+    let mem = SimpleMemory { ram: vec![0; 65536] };
+    let int_ctrl = AutoInterruptController::new();
+    let mut cpu = ConfiguredCore::new_with(0x1000, int_ctrl, mem);
+
+    // CPU starts in exception state, set to Normal to execute
+    cpu.processing_state = ProcessingState::Normal;
+
+    // Execute one instruction
+    let cycles = cpu.execute1();
+    println!("Executed instruction in {} cycles", cycles.0);
+}
+```
 
 ## The Processor
-The [Motorola 68000](https://en.wikipedia.org/wiki/Motorola_68000) CPU, commonly referred to as m68k, was a very successful CPU introduced in 1979, that powered several classic personal computers of the 1980s, such as the Apple Macintosh, Commodore Amiga and Atari ST, as well as the first SUN and Apollo UNIX workstations. It was used in several arcade machines and game consoles such as the Sega Genesis/Mega Drive, and was also found in the first laser printers, such as Apple LaserWriter and HP LaserJet printers, and several calculators (such as Texas Instruments' TI-89 and TI-92).
 
-It typically ran at 8MHz and could address up to 16MB of RAM. However, popular home computers in the mid to late 1980s typically only had 512KB.
+The [Motorola 68000](https://en.wikipedia.org/wiki/Motorola_68000) CPU, commonly referred to as m68k, was a very successful CPU introduced in 1979 that powered several classic personal computers of the 1980s, such as the Apple Macintosh, Commodore Amiga and Atari ST, as well as the first SUN and Apollo UNIX workstations. It was used in several arcade machines and game consoles such as the Sega Genesis/Mega Drive.
+
+It typically ran at 8MHz and could address up to 16MB of RAM.
 
 ## Usage
-Note that the emulator is not a full computer system emulation, it's just a CPU connected to some memory, so on its own it doesn't do anything interesting.
-You will have to load its memory with some program, which is just a series of bytes representing valid instructions and data, and tell it to start executing those. The CPU starts fetching instructions from memory, executes them one by one, which affects the state of the CPU. Some instructions also write to memory, and you can observe and act on these effects. 
 
-One can build a simple computer emulation on top of r68k.
+The emulator is not a full computer system emulation - it's just a CPU connected to memory via the `AddressBus` trait. You load memory with a program (a series of bytes representing valid instructions and data), set the program counter, and execute instructions one by one.
 
-## CPU Emulator
+One can build a complete computer emulation on top of r68k by implementing:
+- Memory-mapped I/O via the `AddressBus` trait
+- Interrupt controllers
+- Peripheral devices
 
-The current status of the r68k emulator is usable. Please note that it only implements the original 68000 instruction set. It does not support instructions specific to newer CPUs in the 68k family (such as the 68010, 68020 or 68040) at this time.
+## CPU Emulator Status
 
-- all instructions are implemented and verified against [Musashi](https://github.com/kstenerud/Musashi)
-- support for autovectored, autoresetting interrupts are in place
-- STOP and HALT states are properly emulated
-- host callbacks for RESET and exception overrides are implemented
-- A memory (RAM) implementation is in place
+The r68k emulator implements the original 68000 instruction set. It does not support instructions specific to newer CPUs in the 68k family (68010, 68020, 68040) at this time.
 
-The main emulation TODOs are:
-- adding a memory implementation with support for memory mapping (letting your program react to reads from and writes to certain addresses). It is possible, however, for the user to implement this themselves if needed
-- add more hooks to simplify integrating the emulator in a larger emulated system
-- Add user/API-documentation and usage examples
+- All instructions implemented and verified against Musashi
+- Autovectored, auto-resetting interrupts
+- STOP and HALT states properly emulated
+- Host callbacks for RESET and exception overrides
+- Paged memory implementation included
 
-## Disassembler
-The Disassembler support the full instruction set, and has been verified against the emulator so that all valid opcodes can be disassembled, and no invalid opcodes are incorrectly recognized by the disassembler.
-The Disassembler currently has no command line interface, but can be used programmatically to disassemble a chunk of memory, one instruction at a time.
+## Changelog
 
-The main disassembly TODOs are:
-- unifying the implementation of memory used by the disassembler, assembler and emulator, in order to simplify disassembling the currently executing code on the fly 
-- adding a command line interface
-- Add user/API-documentation and usage examples
+### v0.2.0 (2025)
 
-## Assembler
-The Assembler supports the full instruction set. It can assemble all valid instructions, which has been verified by disassembling all 64K possible opcodes, making sure that all valid opcodes assemble back to the same sequence of bytes.
+**Modernization:**
+- Updated to Rust Edition 2021
+- Consolidated into single `r68k` crate (merged r68k-common into r68k)
+- Fixed all Clippy warnings
+- Updated dependencies to modern versions (quickcheck 1.0, rand 0.8, etc.)
 
-The parser is based on [the Pest PEG parser generator](https://github.com/dragostis/pest) and supports the full instruction set, and a few directives (but documentation of supported assembler directives is still missing).
+**API Additions:**
+- Added `reset_instruction()` method to `AddressBus` trait for RESET instruction handling (default no-op)
 
-The main disassembly TODOs are:
-- support using symbols such as constants and labels as operands (now has no symbol table, and so requires all operands to be registers or numeric literals)
-- support instruction aliases, such as allowing the user to use *ADD*, but automatically use *ADDA* if the destination is an address register, and *ADDI* or *ADDQ* if the source is immediate data
-- support assembling directly into the emulator memory.
-- improve validation - the assembler in some cases now allows assembly of addressing modes that are in fact invalid for the particular instruction, which will cause an invalid instruction exception if run on the emulator
-- adding a command line interface
-- Add user/API-documentation and usage examples
+### v0.1.0 (2016)
 
-## S-record support
-The [Motorola S-record format](https://en.wikipedia.org/wiki/SREC_(file_format))is a format for representing 
-binary data in a simple ASCII-text format, typically used to contain a "memory image" of microprocessor programs. They contain the compiled microprocessor instructions 
-and data, along the absolute memory addresses where they are to be stored. These files are often produced by a compiler or assembler and then used to upload a program directly into microprocessor memory.
+- Initial port of Musashi 68000 to Rust
 
-The S-record-support is still in a very early stage, and is write only.
+## Testing Philosophy
 
-## Testing philosophy
-All 64k possible opcodes have been A/B-tested against Musashi using [BurntSushi's QuickCheck for Rust](https://github.com/BurntSushi/quickcheck). There's about 54&nbsp;000 valid opcodes for the m68k (and the remaining 11&nbsp;500 does not represent valid instructions).
+All 64k possible opcodes have been A/B-tested against Musashi using [QuickCheck](https://github.com/BurntSushi/quickcheck). There are about 54,000 valid opcodes for the m68k (the remaining 11,500 do not represent valid instructions).
 
-Using QuickCheck means we first generate a *randomized* CPU state (including random values for all D and A registers, and the status register which controls Supervisor mode, and includes condition codes such as overflow, zero etc), then both Musashi and r68k is carefully put in this state, and then the instruction under test is executed, and then the resulting state is compared for any differences. All memory accesses made by either emulator are also compared for any differences, including number and order of accesses, the address used, operation size (8, 16 or 32 bits), as well as the value read/written and address space used (user/supervisor + data/program). Then this process is repeated many times for each opcode implemented.
+Using QuickCheck means we first generate a *randomized* CPU state (including random values for all D and A registers, and the status register), then both Musashi and r68k are put in this state, the instruction under test is executed, and the resulting state is compared for any differences. All memory accesses are also compared, including address, operation size, value, and address space.
 
-In effect, each instruction is compared thoroughly (with random values) to Musashi, using all combinations possible of the allowed source and destination addressing modes and registers. The number of clock cycles consumed is also reported by Musashi after execution, and is also compared to r68k.
+## Credits
 
-If during execution any exceptions are encountered, such as privilege violations, illegal instruction traps or address errors (word or long accesses on odd addresses) then the actions (and cycles) taken by the emulators are also compared in the same way.
+This project is based on the original [r68k](https://github.com/marhel/r68k) by Martin Hellspong ([@marhel](https://github.com/marhel)), who ported Musashi to Rust back in 2016.
 
-Randomized testing tends to immediately discover any differences in the implementation, and tests _not_ failing gives a fair bit of confidence that the implementation is correct - or at least behaves like Musashi, which (unlike r68k) is in fact battle-tested. I'm also frequently referencing the [M68000 Programmer's Reference Manual](https://www.nxp.com/files/archives/doc/ref_manual/M68000PRM.pdf) and [M68000 User's Manual](http://cache.freescale.com/files/32bit/doc/ref_manual/MC68000UM.pdf).
+In 2026, [@slippyex](https://github.com/slippyex) modernized the codebase: updated to Rust Edition 2021, consolidated the crates, updated all dependencies, and aligned the emulation with the latest available Musashi version.
+
+## License
+
+MIT License - see [LICENSE.md](LICENSE.md)
+
+## References
+
+- [M68000 Programmer's Reference Manual](https://www.nxp.com/files/archives/doc/ref_manual/M68000PRM.pdf)
+- [M68000 User's Manual](http://cache.freescale.com/files/32bit/doc/ref_manual/MC68000UM.pdf)
+- [Musashi - Original C implementation](https://github.com/kstenerud/Musashi)
+- [Musashi - Original Rust implementation](https://github.com/marhel/r68k)

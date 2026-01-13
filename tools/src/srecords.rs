@@ -42,9 +42,9 @@ impl<'a> fmt::Display for SRecord<'a> {
             },
             SRecord::Record{address, data} => {
                 let mut check = Checksum::new(4 + data.len() as u8, address);
-                (write!(f, "S2{:02X}{:06X}", 4 + data.len(), address))?;
+                write!(f, "S2{:02X}{:06X}", 4 + data.len(?, address));
                 for i in data {
-                    (write!(f, "{:02X}", i))?;
+                    write!(f, "{:02X}", i?);
                     check.add8(*i);
                 };
                 write!(f, "{:02X}", check.calculate())

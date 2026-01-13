@@ -142,7 +142,7 @@ impl AddressBus for PagedMem {
 #[cfg(test)]
 mod tests {
     use super::{AddressBus, PagedMem, PAGE_SIZE};
-    use ram::{SUPERVISOR_DATA, SUPERVISOR_PROGRAM, USER_DATA, USER_PROGRAM, ADDRBUS_MASK};
+    use crate::ram::{SUPERVISOR_DATA, SUPERVISOR_PROGRAM, USER_DATA, USER_PROGRAM, ADDRBUS_MASK};
 
     #[test]
     fn read_initialized_memory() {

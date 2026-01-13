@@ -921,10 +921,10 @@ impl Clone for TestCore {
 mod tests {
     use super::{TestCore, Cycles};
     use super::ops; //::instruction_set;
-    use ram::{AddressBus, SUPERVISOR_PROGRAM, USER_PROGRAM, USER_DATA};
-    use ram::loggingmem::Operation;
-    use cpu::ops::opcodes;
-    use r68k_common::constants;
+    use crate::ram::{AddressBus, SUPERVISOR_PROGRAM, USER_PROGRAM, USER_DATA};
+    use crate::ram::loggingmem::Operation;
+    use crate::cpu::ops::opcodes;
+    use crate::common::constants;
 
     #[test]
     fn new_sets_pc() {
@@ -1474,7 +1474,7 @@ mod tests {
         assert_eq!(next_instruction, cpu.pc);
     }
 
-    use interrupts::InterruptController;
+    use crate::interrupts::InterruptController;
     #[test]
     fn reset_calls_interrupt_controller() {
         let mut cpu = TestCore::new_mem(0x40, &[0x4e, 0x70]); // 0x4e70 RESET
@@ -1629,7 +1629,7 @@ mod tests {
         assert_eq!(super::ProcessingState::Halted, cpu.processing_state);
     }
 
-    use cpu::{Result, Callbacks, Exception, Core};
+    use crate::cpu::{Result, Callbacks, Exception, Core};
 
     struct CustomExceptionHandler
     {

@@ -132,7 +132,7 @@ impl<T: OpsLogging> AddressBus for LoggingMem<T> {
 #[cfg(test)]
 mod tests {
     use super::{LoggingMem, AddressBus, OpsLogger, Operation};
-    use ram::{SUPERVISOR_DATA, SUPERVISOR_PROGRAM, USER_DATA, USER_PROGRAM, ADDRBUS_MASK};
+    use crate::ram::{SUPERVISOR_DATA, SUPERVISOR_PROGRAM, USER_DATA, USER_PROGRAM, ADDRBUS_MASK};
 
     #[test]
     fn read_byte_is_logged() {

@@ -255,7 +255,7 @@ mod tests {
     use super::super::TestCore;
     use super::super::Exception::AddressError;
     use super::{ea_ax_pd_8, ay_pd_8, ay_ai_16};
-    use ram::{AddressBus, SUPERVISOR_DATA};
+    use crate::ram::{AddressBus, SUPERVISOR_DATA};
 
     #[test]
     fn test_ax_predecrement_8() {

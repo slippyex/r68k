@@ -347,12 +347,12 @@ lazy_static! {
 
 mod tests {
     use super::*;
-    use ram::SUPERVISOR_PROGRAM;
+    use crate::ram::SUPERVISOR_PROGRAM;
     use super::MUSASHI_LOCK;
     use super::QUICKCHECK_LOCK;
-    use ram::{AddressBus};
-    use ram::loggingmem::Operation;
-    use cpu::{TestCore, EXCEPTION_ZERO_DIVIDE, EXCEPTION_CHK, Cycles};
+    use crate::ram::{AddressBus};
+    use crate::ram::loggingmem::Operation;
+    use crate::cpu::{TestCore, EXCEPTION_ZERO_DIVIDE, EXCEPTION_CHK, Cycles};
     use std::cmp;
 
     extern crate quickcheck;
@@ -403,7 +403,7 @@ mod tests {
     extern crate rand;
 
     use itertools::{Itertools, assert_equal};
-    use cpu::ops::opcodes::*;
+    use crate::cpu::ops::opcodes::*;
     use super::get_ops;
     // struct OpSeq {
     //     mask: u32,
@@ -598,7 +598,7 @@ mod tests {
         })
     }
 
-    use r68k_common::constants::*;
+    use crate::common::constants::*;
 
     const MASK_LO3NIB_QUICKER: u32 = MASK_LO3NIB + 0x0555;
     qc_allow_exception!(MASK_LO3NIB_QUICKER, OP_UNIMPLEMENTED_1010, qc_unimplemented_1010);

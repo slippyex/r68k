@@ -1,5 +1,5 @@
-pub use r68k_common::ops::*;
-use r68k_common::constants::*;
+pub use crate::common::ops::*;
+use crate::common::constants::*;
 
 // -- OP-constants -------------------------------
 pub const OP_ABCD_8_RR: u32 = OP_ABCD | BYTE_SIZED | RR_MODE;
