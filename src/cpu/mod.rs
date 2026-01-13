@@ -344,6 +344,12 @@ pub struct ConfiguredCore<T: InterruptController, A: AddressBus> {
     pub processing_state: ProcessingState,
     /// The memory/address bus.
     pub mem: A,
+    /// Cycle granularity for timing alignment.
+    ///
+    /// All cycle counts are rounded up to the nearest multiple of this value.
+    /// Default is 1 (no rounding). Set to 4 for Atari ST compatibility where
+    /// the 68000 bus is synchronized to a 4-cycle boundary.
+    cycle_granularity: i32,
 }
 impl<T: InterruptController, A: AddressBus> Core for ConfiguredCore<T, A> {
     fn dar(&mut self) -> &mut [u32; 16] {
@@ -807,7 +813,8 @@ impl TestCore {
             pc: base, prefetch_addr: 0, prefetch_data: 0, inactive_ssp: 0, inactive_usp: 0, ir: 0, processing_state: ProcessingState::Group0Exception,
             dar: [0u32; 16], mem: LoggingMem::new(0xaaaa_aaaa, OpsLogger::new()), instruction_set: ops::instruction_set(),
             irq_level: 0, int_ctrl: AutoInterruptController::new(),
-            s_flag: SFLAG_SET, int_mask: CPU_SR_INT_MASK, x_flag: 0, v_flag: 0, c_flag: 0, n_flag: 0, not_z_flag: 0xffff_ffff
+            s_flag: SFLAG_SET, int_mask: CPU_SR_INT_MASK, x_flag: 0, v_flag: 0, c_flag: 0, n_flag: 0, not_z_flag: 0xffff_ffff,
+            cycle_granularity: 1,
         }
     }
     pub fn new_auto() -> TestCore {
@@ -825,7 +832,8 @@ impl TestCore {
             pc: base, prefetch_addr: 0, prefetch_data: 0, inactive_ssp: 0, inactive_usp: 0, ir: 0, processing_state: ProcessingState::Normal,
             dar: [0u32; 16], mem: lm, instruction_set: ops::instruction_set(),
             irq_level: 0, int_ctrl: AutoInterruptController::new(),
-            s_flag: SFLAG_SET, int_mask: CPU_SR_INT_MASK, x_flag: 0, v_flag: 0, c_flag: 0, n_flag: 0, not_z_flag: 0xffff_ffff
+            s_flag: SFLAG_SET, int_mask: CPU_SR_INT_MASK, x_flag: 0, v_flag: 0, c_flag: 0, n_flag: 0, not_z_flag: 0xffff_ffff,
+            cycle_granularity: 1,
         }
     }
 }
@@ -859,7 +867,62 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
             pc: base, prefetch_addr: 0, prefetch_data: 0, inactive_ssp: 0, inactive_usp: 0, ir: 0, processing_state: ProcessingState::Group0Exception,
             dar: [0u32; 16], mem: memory, instruction_set: ops::instruction_set(),
             irq_level: 0, int_ctrl,
-            s_flag: SFLAG_SET, int_mask: CPU_SR_INT_MASK, x_flag: 0, v_flag: 0, c_flag: 0, n_flag: 0, not_z_flag: 0xffff_ffff
+            s_flag: SFLAG_SET, int_mask: CPU_SR_INT_MASK, x_flag: 0, v_flag: 0, c_flag: 0, n_flag: 0, not_z_flag: 0xffff_ffff,
+            cycle_granularity: 1,
+        }
+    }
+
+    /// Sets the cycle granularity for timing alignment.
+    ///
+    /// All instruction cycle counts will be rounded up to the nearest multiple
+    /// of the granularity value. This is useful for emulating systems where the
+    /// 68000 bus is synchronized to a specific clock boundary.
+    ///
+    /// # Arguments
+    ///
+    /// * `granularity` - The cycle alignment boundary (must be >= 1)
+    ///
+    /// # Common Values
+    ///
+    /// * `1` - No rounding (default, standard 68000 behavior)
+    /// * `4` - Atari ST compatibility (bus synchronized to 4-cycle boundary)
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use r68k::cpu::Cpu;
+    ///
+    /// let mut cpu = Cpu::new(0);
+    ///
+    /// // Configure for Atari ST timing
+    /// cpu.set_cycle_granularity(4);
+    ///
+    /// cpu.reset();
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `granularity` is less than 1.
+    pub fn set_cycle_granularity(&mut self, granularity: i32) {
+        assert!(granularity >= 1, "cycle granularity must be >= 1");
+        self.cycle_granularity = granularity;
+    }
+
+    /// Returns the current cycle granularity setting.
+    pub fn cycle_granularity(&self) -> i32 {
+        self.cycle_granularity
+    }
+
+    /// Rounds a cycle count up to the configured granularity boundary.
+    #[inline]
+    fn align_cycles(&self, cycles: Cycles) -> Cycles {
+        if self.cycle_granularity == 1 {
+            cycles
+        } else {
+            // Round up: (n + g - 1) / g * g
+            let n = cycles.0;
+            let g = self.cycle_granularity;
+            Cycles(((n + g - 1) / g) * g)
         }
     }
 
@@ -1357,7 +1420,7 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
                     // Call instruction handler to mutate Core accordingly
                     self.instruction_set[opcode as usize](self)
                 });
-            remaining_cycles = remaining_cycles - match result {
+            let cycles_used = match result {
                 Ok(cycles_used) => cycles_used,
                 Err(ex) => {
                     match state.exception_callback(self, ex) {
@@ -1377,6 +1440,8 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
                     }
                 }
             };
+            // Apply cycle granularity alignment (e.g., 4-cycle boundary for Atari ST)
+            remaining_cycles = remaining_cycles - self.align_cycles(cycles_used);
         }
         if self.processing_state.running() {
             cycles - remaining_cycles
@@ -1398,7 +1463,8 @@ impl Clone for TestCore {
             pc: self.pc, prefetch_addr: 0, prefetch_data: 0, inactive_ssp: self.inactive_ssp, inactive_usp: self.inactive_usp, ir: self.ir, processing_state: self.processing_state,
             dar: self.dar, mem: lm, instruction_set: ops::instruction_set(),
             irq_level: 0, int_ctrl: AutoInterruptController::new(),
-            s_flag: self.s_flag, int_mask: self.int_mask, x_flag: self.x_flag, v_flag: self.v_flag, c_flag: self.c_flag, n_flag: self.n_flag, not_z_flag: self.not_z_flag
+            s_flag: self.s_flag, int_mask: self.int_mask, x_flag: self.x_flag, v_flag: self.v_flag, c_flag: self.c_flag, n_flag: self.n_flag, not_z_flag: self.not_z_flag,
+            cycle_granularity: self.cycle_granularity,
         }
     }
 }
@@ -1410,7 +1476,6 @@ mod tests {
     use crate::ram::{AddressBus, SUPERVISOR_PROGRAM, USER_PROGRAM, USER_DATA};
     use crate::ram::loggingmem::Operation;
     use crate::cpu::ops::opcodes;
-    use crate::common::constants;
 
     #[test]
     fn new_sets_pc() {
@@ -1564,6 +1629,46 @@ mod tests {
         let mut cpu = TestCore::new_mem(0x40, &[0xc3, 0x08, 0xc3, 0x08]);
         let Cycles(count) = cpu.execute(20);
         assert_eq!(18*2, count);
+    }
+
+    #[test]
+    fn cycle_granularity_rounds_up_to_boundary() {
+        // 0xc308 = abcd_8_mm taking 18 cycles
+        // With granularity 4, should round up to 20
+        let mut cpu = TestCore::new_mem(0x40, &[0xc3, 0x08]);
+        cpu.set_cycle_granularity(4);
+        let Cycles(count) = cpu.execute1();
+        assert_eq!(20, count); // 18 rounded up to next multiple of 4
+    }
+
+    #[test]
+    fn cycle_granularity_no_change_when_already_aligned() {
+        // 0xc300 = abcd_8_rr taking 6 cycles (already aligned to 4)
+        // NOP = 0x4e71 taking 4 cycles (already aligned)
+        let mut cpu = TestCore::new_mem(0x40, &[0x4e, 0x71]);
+        cpu.set_cycle_granularity(4);
+        let Cycles(count) = cpu.execute1();
+        assert_eq!(4, count); // Already a multiple of 4
+    }
+
+    #[test]
+    fn cycle_granularity_atari_st_mode() {
+        // Simulate Atari ST timing with two instructions
+        // 0xc308 = abcd_8_mm taking 18 cycles -> rounds to 20
+        // 0xc300 = abcd_8_rr taking 6 cycles -> rounds to 8
+        let mut cpu = TestCore::new_mem(0x40, &[0xc3, 0x08, 0xc3, 0x00]);
+        cpu.set_cycle_granularity(4);
+
+        // Execute first instruction - takes 18 cycles, aligned to 20
+        let Cycles(count) = cpu.execute1();
+        assert_eq!(20, count);
+
+        // Execute second instruction - takes 6 cycles, aligned to 8
+        let Cycles(count2) = cpu.execute1();
+        assert_eq!(8, count2);
+
+        // Total: 28 cycles aligned (vs 24 raw) - matching Atari ST bus behavior
+        assert_eq!(28, count + count2);
     }
 
     #[test]
