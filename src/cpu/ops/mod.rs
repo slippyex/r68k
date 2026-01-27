@@ -986,9 +986,9 @@ macro_rules! chk_16 {
                 Ok(Cycles($cycles))
             } else {
                 n_flag!(core) = if src < 0 {1 << 7} else {0};
-                // 40 cycles for the CHK trap + EA calculation time
+                // 44 cycles for the CHK trap (MC68000UM Table 8-14) + EA calculation time
                 // deduct the 10 base cycles for the instruction, to extract EA cycles.
-                Err(Trap(EXCEPTION_CHK, 40 + $cycles - 10))
+                Err(Trap(EXCEPTION_CHK, 44 + $cycles - 10))
             }
         });
 }
@@ -1239,9 +1239,9 @@ macro_rules! div_op {
                 common::$common(core, dst, src);
                 Ok(Cycles($cycles))
             } else {
-                // 38 cycles for the ZERO_DIVIDE trap + EA calculation time
+                // 42 cycles for the ZERO_DIVIDE trap (MC68000UM Table 8-14) + EA calculation time
                 // deduct the base cycles for the instruction, to extract EA cycles.
-                Err(Trap(EXCEPTION_ZERO_DIVIDE, 38 + ($cycles - $base_cycles)))
+                Err(Trap(EXCEPTION_ZERO_DIVIDE, 42 + ($cycles - $base_cycles)))
             }
         })
 }
@@ -3410,7 +3410,8 @@ tas_8!(tas_8_al, ea_al_8, 14+12);
 
 // Put implementation of TRAP ops here
 pub fn trap<T: Core>(core: &mut T) -> Result<Cycles> {
-    Err(Trap(EXCEPTION_TRAP_BASE + low_nibble!(ir!(core)) as u8, 34))
+    // 38 cycles for TRAP #n according to MC68000UM Table 8-14
+    Err(Trap(EXCEPTION_TRAP_BASE + low_nibble!(ir!(core)) as u8, 38))
 }
 
 // Put implementation of TRAPV ops here

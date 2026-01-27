@@ -10,6 +10,7 @@ r68k is an emulator for the Motorola 68000 CPU written in Rust, ported from [Kar
 
 - Complete 68000 instruction set implementation
 - Cycle-accurate emulation verified against Musashi
+- Accurate exception timing (per MC68000UM Table 8-14)
 - Configurable cycle granularity (e.g., 4-cycle boundary for Atari ST)
 - Support for autovectored interrupts
 - STOP and HALT states properly emulated
@@ -129,6 +130,23 @@ let cycles = cpu.execute1();
 
 The default granularity is 1 (no alignment).
 
+## Exception Timing
+
+Exception processing costs CPU cycles according to MC68000UM Table 8-14. This is critical for cycle-accurate emulation, especially for interrupt-driven audio (sync buzzer, digidrum) where the interrupt handler timing directly affects sample rates.
+
+| Exception | Cycles | Bus Cycles (R/W) |
+|-----------|--------|------------------|
+| Address Error | 50 | 4/7 |
+| Illegal Instruction | 34 | 4/3 |
+| Privilege Violation | 34 | 4/3 |
+| TRAP #n | 38 | 4/3 |
+| TRAPV | 34 | 4/3 |
+| Divide by Zero | 42 + EA | 5/3 |
+| CHK | 44 + EA | 5/3 |
+| Interrupt | 44 | 5/3 |
+
+These cycle counts include stacking SR/PC, fetching the exception vector, and prefetching the first two instruction words of the handler.
+
 ## CPU Emulator Status
 
 The r68k emulator implements the original 68000 instruction set. It does not support instructions specific to newer CPUs in the 68k family (68010, 68020, 68040) at this time.
@@ -141,6 +159,15 @@ The r68k emulator implements the original 68000 instruction set. It does not sup
 
 ## Changelog
 
+### v0.2.1 (2026)
+
+**Cycle Accuracy Improvements:**
+- Added configurable cycle granularity via `set_cycle_granularity()` for Atari ST and similar systems
+- Fixed exception timing to match MC68000UM Table 8-14:
+  - TRAP #n: 34 → 38 cycles
+  - Divide by Zero: 38 → 42 cycles (+ EA)
+  - CHK: 40 → 44 cycles (+ EA)
+
 ### v0.2.0 (2026)
 
 **Modernization:**
@@ -151,7 +178,6 @@ The r68k emulator implements the original 68000 instruction set. It does not sup
 
 **API Additions:**
 - Added `reset_instruction()` method to `AddressBus` trait for RESET instruction handling (default no-op)
-- Added configurable cycle granularity via `set_cycle_granularity()` for Atari ST and similar systems
 - Added `Cpu` type alias and `Cpu::new()` convenience constructor
 - Comprehensive API documentation for crates.io publication
 
