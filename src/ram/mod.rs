@@ -186,5 +186,36 @@ pub trait AddressBus {
     /// Override this to reset external devices connected to the bus.
     /// Default implementation does nothing.
     fn reset_instruction(&mut self) {}
+
+    /// Returns additional wait state cycles for a memory access.
+    ///
+    /// Override this to model bus timing characteristics of specific hardware.
+    /// For example, the Atari ST has wait states when accessing ROM or I/O.
+    ///
+    /// # Arguments
+    ///
+    /// * `address` - The memory address being accessed
+    /// * `access_size` - Size of access: 1 (byte), 2 (word), or 4 (long)
+    /// * `is_write` - True for write operations, false for reads
+    ///
+    /// # Returns
+    ///
+    /// Additional cycles to add to the access (0 = no wait states).
+    /// Default implementation returns 0 for all accesses.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// fn wait_cycles(&self, address: u32, access_size: u8, is_write: bool) -> i32 {
+    ///     match address {
+    ///         0xFC0000..=0xFFFFFF => 2,  // ROM: 2 wait states
+    ///         0xFF8000..=0xFF8FFF => 4,  // I/O: 4 wait states
+    ///         _ => 0,                     // RAM: no wait states
+    ///     }
+    /// }
+    /// ```
+    fn wait_cycles(&self, _address: u32, _access_size: u8, _is_write: bool) -> i32 {
+        0
+    }
 }
 

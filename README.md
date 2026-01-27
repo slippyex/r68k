@@ -12,6 +12,7 @@ r68k is an emulator for the Motorola 68000 CPU written in Rust, ported from [Kar
 - Cycle-accurate emulation verified against Musashi
 - Accurate exception timing (per MC68000UM Table 8-14)
 - Configurable cycle granularity (e.g., 4-cycle boundary for Atari ST)
+- Configurable memory wait states for ROM/I/O timing
 - Support for autovectored interrupts
 - STOP and HALT states properly emulated
 - Host callbacks for RESET instruction and exception overrides
@@ -147,6 +148,26 @@ Exception processing costs CPU cycles according to MC68000UM Table 8-14. This is
 
 These cycle counts include stacking SR/PC, fetching the exception vector, and prefetching the first two instruction words of the handler.
 
+## Wait States
+
+Memory accesses can have additional wait state cycles depending on the hardware. Override the `wait_cycles` method in your `AddressBus` implementation to model this:
+
+```rust
+impl AddressBus for AtariSTMemory {
+    // ... other methods ...
+
+    fn wait_cycles(&self, address: u32, access_size: u8, is_write: bool) -> i32 {
+        match address {
+            0xFC0000..=0xFFFFFF => 2,  // ROM: 2 wait states
+            0xFF8000..=0xFF8FFF => 4,  // I/O registers: 4 wait states
+            _ => 0,                     // RAM: no wait states
+        }
+    }
+}
+```
+
+Wait states are accumulated during instruction execution and added to the instruction's base cycle count before cycle granularity alignment is applied. The default implementation returns 0 for all accesses.
+
 ## CPU Emulator Status
 
 The r68k emulator implements the original 68000 instruction set. It does not support instructions specific to newer CPUs in the 68k family (68010, 68020, 68040) at this time.
@@ -163,6 +184,7 @@ The r68k emulator implements the original 68000 instruction set. It does not sup
 
 **Cycle Accuracy Improvements:**
 - Added configurable cycle granularity via `set_cycle_granularity()` for Atari ST and similar systems
+- Added wait state support via `AddressBus::wait_cycles()` method
 - Fixed exception timing to match MC68000UM Table 8-14:
   - TRAP #n: 34 → 38 cycles
   - Divide by Zero: 38 → 42 cycles (+ EA)

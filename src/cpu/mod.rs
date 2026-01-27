@@ -350,6 +350,11 @@ pub struct ConfiguredCore<T: InterruptController, A: AddressBus> {
     /// Default is 1 (no rounding). Set to 4 for Atari ST compatibility where
     /// the 68000 bus is synchronized to a 4-cycle boundary.
     cycle_granularity: i32,
+    /// Accumulated wait state cycles during current instruction execution.
+    ///
+    /// This is reset at the start of each instruction and added to the
+    /// instruction's cycle count at the end.
+    pending_wait_cycles: i32,
 }
 impl<T: InterruptController, A: AddressBus> Core for ConfiguredCore<T, A> {
     fn dar(&mut self) -> &mut [u32; 16] {
@@ -814,7 +819,7 @@ impl TestCore {
             dar: [0u32; 16], mem: LoggingMem::new(0xaaaa_aaaa, OpsLogger::new()), instruction_set: ops::instruction_set(),
             irq_level: 0, int_ctrl: AutoInterruptController::new(),
             s_flag: SFLAG_SET, int_mask: CPU_SR_INT_MASK, x_flag: 0, v_flag: 0, c_flag: 0, n_flag: 0, not_z_flag: 0xffff_ffff,
-            cycle_granularity: 1,
+            cycle_granularity: 1, pending_wait_cycles: 0,
         }
     }
     pub fn new_auto() -> TestCore {
@@ -833,7 +838,7 @@ impl TestCore {
             dar: [0u32; 16], mem: lm, instruction_set: ops::instruction_set(),
             irq_level: 0, int_ctrl: AutoInterruptController::new(),
             s_flag: SFLAG_SET, int_mask: CPU_SR_INT_MASK, x_flag: 0, v_flag: 0, c_flag: 0, n_flag: 0, not_z_flag: 0xffff_ffff,
-            cycle_granularity: 1,
+            cycle_granularity: 1, pending_wait_cycles: 0,
         }
     }
 }
@@ -868,7 +873,7 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
             dar: [0u32; 16], mem: memory, instruction_set: ops::instruction_set(),
             irq_level: 0, int_ctrl,
             s_flag: SFLAG_SET, int_mask: CPU_SR_INT_MASK, x_flag: 0, v_flag: 0, c_flag: 0, n_flag: 0, not_z_flag: 0xffff_ffff,
-            cycle_granularity: 1,
+            cycle_granularity: 1, pending_wait_cycles: 0,
         }
     }
 
@@ -1062,6 +1067,7 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
         let fetched = if self.pc & !3 != self.prefetch_addr {
             self.prefetch_addr = self.pc & !3;
             let address_space = if self.s_flag != 0 {SUPERVISOR_PROGRAM} else {USER_PROGRAM};
+            self.pending_wait_cycles += self.mem.wait_cycles(self.prefetch_addr, 4, false);
             self.prefetch_data = self.mem.read_long(address_space, self.prefetch_addr);
             true
         } else {
@@ -1127,19 +1133,23 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
     }
     pub fn read_data_byte(&mut self, address: u32) -> Result<u32> {
         let address_space = if self.s_flag != 0 {SUPERVISOR_DATA} else {USER_DATA};
+        self.pending_wait_cycles += self.mem.wait_cycles(address, 1, false);
         Ok(self.mem.read_byte(address_space, address))
     }
     pub fn read_program_byte(&mut self, address: u32) -> Result<u32> {
         let address_space = if self.s_flag != 0 {SUPERVISOR_PROGRAM} else {USER_PROGRAM};
+        self.pending_wait_cycles += self.mem.wait_cycles(address, 1, false);
         Ok(self.mem.read_byte(address_space, address))
     }
     pub fn write_data_byte(&mut self, address: u32, value: u32) -> Result<()> {
         let address_space = if self.s_flag != 0 {SUPERVISOR_DATA} else {USER_DATA};
+        self.pending_wait_cycles += self.mem.wait_cycles(address, 1, true);
         self.mem.write_byte(address_space, address, value);
         Ok(())
     }
     pub fn write_program_byte(&mut self, address: u32, value: u32) -> Result<()> {
         let address_space = if self.s_flag != 0 {SUPERVISOR_PROGRAM} else {USER_PROGRAM};
+        self.pending_wait_cycles += self.mem.wait_cycles(address, 1, true);
         self.mem.write_byte(address_space, address, value);
         Ok(())
     }
@@ -1148,6 +1158,7 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
         if address & 1 > 0 {
             Err(Exception::AddressError{address, access_type: AccessType::Read, address_space, processing_state: self.processing_state})
         } else {
+            self.pending_wait_cycles += self.mem.wait_cycles(address, 2, false);
             Ok(self.mem.read_word(address_space, address))
         }
     }
@@ -1156,6 +1167,7 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
         if address & 1 > 0 {
             Err(Exception::AddressError {address, access_type: AccessType::Read, address_space, processing_state: self.processing_state})
         } else {
+            self.pending_wait_cycles += self.mem.wait_cycles(address, 2, false);
             Ok(self.mem.read_word(address_space, address))
         }
     }
@@ -1164,6 +1176,7 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
         if address & 1 > 0 {
             Err(Exception::AddressError{address, access_type: AccessType::Write, address_space, processing_state: self.processing_state})
         } else {
+            self.pending_wait_cycles += self.mem.wait_cycles(address, 2, true);
             self.mem.write_word(address_space, address, value);
             Ok(())
         }
@@ -1173,6 +1186,7 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
         if address & 1 > 0 {
             Err(Exception::AddressError{address, access_type: AccessType::Write, address_space, processing_state: self.processing_state})
         } else {
+            self.pending_wait_cycles += self.mem.wait_cycles(address, 2, true);
             self.mem.write_word(address_space, address, value);
             Ok(())
         }
@@ -1182,6 +1196,7 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
         if address & 1 > 0 {
             Err(Exception::AddressError{address, access_type: AccessType::Read, address_space, processing_state: self.processing_state})
         } else {
+            self.pending_wait_cycles += self.mem.wait_cycles(address, 4, false);
             Ok(self.mem.read_long(address_space, address))
         }
     }
@@ -1190,6 +1205,7 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
         if address & 1 > 0 {
             Err(Exception::AddressError{address, access_type: AccessType::Read, address_space, processing_state: self.processing_state})
         } else {
+            self.pending_wait_cycles += self.mem.wait_cycles(address, 4, false);
             Ok(self.mem.read_long(address_space, address))
         }
     }
@@ -1198,6 +1214,7 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
         if address & 1 > 0 {
             Err(Exception::AddressError{address, access_type: AccessType::Write, address_space, processing_state: self.processing_state})
         } else {
+            self.pending_wait_cycles += self.mem.wait_cycles(address, 4, true);
             self.mem.write_long(address_space, address, value);
             Ok(())
         }
@@ -1207,6 +1224,7 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
         if address & 1 > 0 {
             Err(Exception::AddressError{address, access_type: AccessType::Write, address_space, processing_state: self.processing_state})
         } else {
+            self.pending_wait_cycles += self.mem.wait_cycles(address, 4, true);
             self.mem.write_long(address_space, address, value);
             Ok(())
         }
@@ -1414,6 +1432,8 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
         let cycles = Cycles(cycles);
         let mut remaining_cycles = cycles;
         while remaining_cycles.any() && self.can_execute() {
+            // Reset wait state accumulator for this instruction
+            self.pending_wait_cycles = 0;
             // Read an instruction from PC (increments PC by 2)
             let result = self.read_instruction().and_then(|opcode| {
                     self.ir = opcode;
@@ -1440,8 +1460,9 @@ impl<T: InterruptController, A: AddressBus> ConfiguredCore<T, A> {
                     }
                 }
             };
-            // Apply cycle granularity alignment (e.g., 4-cycle boundary for Atari ST)
-            remaining_cycles = remaining_cycles - self.align_cycles(cycles_used);
+            // Add accumulated wait state cycles and apply granularity alignment
+            let total_cycles = Cycles(cycles_used.0 + self.pending_wait_cycles);
+            remaining_cycles = remaining_cycles - self.align_cycles(total_cycles);
         }
         if self.processing_state.running() {
             cycles - remaining_cycles
@@ -1464,7 +1485,7 @@ impl Clone for TestCore {
             dar: self.dar, mem: lm, instruction_set: ops::instruction_set(),
             irq_level: 0, int_ctrl: AutoInterruptController::new(),
             s_flag: self.s_flag, int_mask: self.int_mask, x_flag: self.x_flag, v_flag: self.v_flag, c_flag: self.c_flag, n_flag: self.n_flag, not_z_flag: self.not_z_flag,
-            cycle_granularity: self.cycle_granularity,
+            cycle_granularity: self.cycle_granularity, pending_wait_cycles: 0,
         }
     }
 }
